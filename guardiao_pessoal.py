@@ -2,6 +2,7 @@ import streamlit as st
 from groq import Groq
 from datetime import datetime
 import json
+import re
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="GUARDIÃO PESSOAL", layout="wide")
@@ -83,10 +84,13 @@ st.markdown("""
     /* ── EMERGÊNCIA ── */
     .btn-emergencia button {
         background: linear-gradient(135deg, #DC2626, #EF4444) !important;
+        color: #FDE047 !important;
         box-shadow: 0 4px 20px rgba(220,38,38,0.4) !important;
         font-size: 1.05em !important;
+        font-weight: 700 !important;
         animation: pulse-emerg 2s infinite;
     }
+    .btn-emergencia button * { color: #FDE047 !important; }
     @keyframes pulse-emerg {
         0%, 100% { box-shadow: 0 4px 20px rgba(220,38,38,0.4); }
         50% { box-shadow: 0 4px 30px rgba(220,38,38,0.7); }
@@ -119,6 +123,57 @@ st.markdown("""
     }
 
     .divider { border: none; height: 1px; background: linear-gradient(to right, transparent, #3B82F6, transparent); margin: 20px 0; }
+
+    /* ── ÍNDICE DE PROTEÇÃO (HOME) ── */
+    .indice-protecao-box {
+        border-radius: 20px; padding: 28px; text-align: center; margin: 14px 0;
+        border: 2px solid;
+    }
+    .indice-numero {
+        font-family: 'Playfair Display', serif; font-size: 3.2em; font-weight: 700; line-height: 1;
+    }
+    .indice-sub { font-size: 0.95em; color: #555; margin-top: 6px; }
+
+    /* ── CARDS DE DASHBOARD ── */
+    .dash-card {
+        background: #FFFFFF; border: 1px solid #3B82F6; border-radius: 14px;
+        padding: 18px; text-align: center; box-shadow: 0 2px 8px rgba(30,58,138,0.06);
+    }
+    .dash-card-emoji { font-size: 1.6em; }
+    .dash-card-valor { font-size: 1.8em; font-weight:700; color:#1D4ED8; font-family:'Playfair Display',serif; }
+    .dash-card-label { font-size: 0.78em; color:#666; margin-top:2px; }
+
+    /* ── BARRA DE PROGRESSO POR CATEGORIA ── */
+    .progresso-categoria { margin-bottom: 14px; }
+    .progresso-categoria-label { font-size: 0.85em; font-weight:600; margin-bottom:4px; display:flex; justify-content:space-between; }
+    .progresso-barra-bg { background:#E2E8F0; border-radius:999px; height:14px; overflow:hidden; }
+    .progresso-barra-fill { height:100%; border-radius:999px; background: linear-gradient(90deg,#1D4ED8,#3B82F6); transition: width 0.5s ease; }
+
+    /* ── CONQUISTAS ── */
+    .conquista-card {
+        background: linear-gradient(135deg,#FFFBEB,#FEF3C7); border: 1px solid #F59E0B;
+        border-radius: 12px; padding: 12px 16px; margin-bottom: 8px;
+        display:flex; align-items:center; gap:12px;
+    }
+    .conquista-emoji { font-size: 1.8em; }
+    .conquista-bloqueada {
+        background: #F1F5F9; border: 1px dashed #CBD5E1; opacity: 0.6;
+    }
+
+    /* ── NOTIFICAÇÃO DE NOVA CONQUISTA ── */
+    .toast-conquista {
+        background: linear-gradient(135deg,#FEF3C7,#FDE68A); border: 2px solid #F59E0B;
+        border-radius: 14px; padding: 14px 18px; margin: 10px 0; text-align:center;
+        animation: pop-in 0.4s ease;
+    }
+    @keyframes pop-in { 0% { transform: scale(0.9); opacity:0; } 100% { transform: scale(1); opacity:1; } }
+
+    /* ── CHECKLIST ── */
+    .checklist-diario-item {
+        background:#FFFFFF; border:1px solid #BFDBFE; border-radius:10px;
+        padding: 10px 14px; margin-bottom:6px; display:flex; align-items:center; gap:10px;
+    }
+
     </style>
 """, unsafe_allow_html=True)
 
@@ -137,6 +192,8 @@ _cache = get_cache_guardiao()
 CHAVES_SALVAR = [
     'usuario', 'historico_relatorios', 'relatorios_salvos',
     'cidade_padrao', 'tem_filhos', 'tem_idosos_em_casa',
+    'conquistas_desbloqueadas', 'checklist_diario_status',
+    'horarios_trajeto_historico', 'tempo_total_planejamento_min',
 ]
 
 def gerar_json_sessao() -> str:
@@ -158,13 +215,57 @@ def perfis_salvos() -> list:
 def carregar_perfil_cache(usuario: str) -> dict | None:
     return _cache["perfis"].get(usuario)
 
-def salvar_relatorio(tipo: str, local: str, conteudo: str):
+def salvar_relatorio(tipo: str, local: str, conteudo: str, indice_seguranca: int = None):
     st.session_state.historico_relatorios.append({
-        'data':     datetime.now().strftime('%d/%m %H:%M'),
-        'tipo':     tipo,
-        'local':    local,
-        'conteudo': conteudo,
+        'data':             datetime.now().strftime('%d/%m %H:%M'),
+        'tipo':             tipo,
+        'local':            local,
+        'conteudo':         conteudo,
+        'indice_seguranca': indice_seguranca,
     })
+    st.session_state.tempo_total_planejamento_min += 4  # estimativa de tempo gasto por análise
+    verificar_conquistas()
+
+def extrair_indice_seguranca(texto: str) -> int:
+    """Extrai um índice 0-100 do texto, ou estima com base no nível de risco mencionado."""
+    match = re.search(r'(\d{1,3})\s*/\s*100', texto)
+    if match:
+        valor = int(match.group(1))
+        return min(100, max(0, valor))
+    # fallback: estima pelo nível de risco textual
+    texto_lower = texto.lower()
+    if "elevado" in texto_lower or "🔴" in texto:
+        return 35
+    elif "moderado" in texto_lower or "🟡" in texto:
+        return 62
+    else:
+        return 85
+
+CONQUISTAS_DEFINIDAS = [
+    {"id": "primeira_analise",  "nome": "Primeira Análise",         "emoji": "🏅", "condicao": lambda s: len(s.historico_relatorios) >= 1},
+    {"id": "primeiro_trajeto",  "nome": "Primeiro Trajeto Seguro",   "emoji": "🚶", "condicao": lambda s: any(r['tipo']=='Trajeto' for r in s.historico_relatorios)},
+    {"id": "primeira_viagem",   "nome": "Primeira Viagem Segura",    "emoji": "✈️", "condicao": lambda s: any(r['tipo']=='Viagem' for r in s.historico_relatorios)},
+    {"id": "casa_protegida",    "nome": "Casa Protegida",            "emoji": "🏠", "condicao": lambda s: any(r['tipo']=='Residência' for r in s.historico_relatorios)},
+    {"id": "dez_analises",      "nome": "10 Análises Realizadas",    "emoji": "🎯", "condicao": lambda s: len(s.historico_relatorios) >= 10},
+    {"id": "especialista",      "nome": "Especialista em Prevenção", "emoji": "🛡️", "condicao": lambda s: len(s.historico_relatorios) >= 25},
+    {"id": "familia_protegida", "nome": "Família Protegida",         "emoji": "👨‍👩‍👧", "condicao": lambda s: any(r['tipo']=='Infantil' for r in s.historico_relatorios) and any(r['tipo']=='Idosos' for r in s.historico_relatorios)},
+    {"id": "todas_categorias",  "nome": "Proteção Completa",         "emoji": "🏆", "condicao": lambda s: len(set(r['tipo'] for r in s.historico_relatorios)) >= 5},
+]
+
+def verificar_conquistas():
+    """Checa se alguma nova conquista foi desbloqueada e retorna lista de novas."""
+    novas = []
+    for c in CONQUISTAS_DEFINIDAS:
+        if c['id'] not in st.session_state.conquistas_desbloqueadas:
+            if c['condicao'](st.session_state):
+                st.session_state.conquistas_desbloqueadas.append(c['id'])
+                novas.append(c)
+    return novas
+
+def calcular_progresso_categoria(tipo: str, meta: int = 5) -> int:
+    """Calcula % de progresso (0-100) numa categoria, com teto na meta."""
+    count = sum(1 for r in st.session_state.historico_relatorios if r['tipo'] == tipo)
+    return min(100, round(count / meta * 100))
 
 # --- INICIALIZAÇÃO DE ESTADO ---
 defaults = {
@@ -177,6 +278,10 @@ defaults = {
     'cidade_padrao':        "",
     'tem_filhos':           False,
     'tem_idosos_em_casa':   False,
+    'conquistas_desbloqueadas':   [],
+    'checklist_diario_status':    {},
+    'horarios_trajeto_historico': [],
+    'tempo_total_planejamento_min': 0,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -193,6 +298,13 @@ PRINCÍPIO OBRIGATÓRIO DE COMUNICAÇÃO DE RISCO — siga isso em TODA a respos
 - Nunca estigmatize bairros, grupos de pessoas ou regiões inteiras
 - O objetivo é AUMENTAR a sensação de preparo e cuidado, NUNCA gerar pânico ou medo excessivo
 - Equilibre sempre alertas com reforço de que a esmagadora maioria dos trajetos e situações do dia a dia ocorre sem qualquer incidente
+
+FORMATO OBRIGATÓRIO — TODA resposta de relatório/análise deve:
+1. Incluir uma linha com "ÍNDICE DE SEGURANÇA: [X]/100" onde X é um número de 0 a 100 coerente com o nível de risco descrito
+   (quanto mais riscos/cuidados, menor o número; ambientes tranquilos ficam entre 75-95)
+2. Terminar SEMPRE com uma seção final assim:
+   🧠 SE EU ESTIVESSE NO SEU LUGAR:
+   [1-2 frases em primeira pessoa, como um conselho direto e pessoal — ex: "Se eu estivesse no seu lugar, faria três mudanças simples: ..."]
 """
 
 # --- MOTOR DE IA ---
@@ -243,8 +355,8 @@ def barra_salvar():
         )
     st.markdown("<hr class='divider'>", unsafe_allow_html=True)
 
-def renderizar_nivel_risco(texto: str):
-    """Detecta o nível de risco mencionado no texto e renderiza o card visual."""
+def renderizar_nivel_risco(texto: str) -> int:
+    """Detecta o nível de risco mencionado no texto, renderiza o card visual com índice numérico, e retorna o índice."""
     texto_lower = texto.lower()
     if "elevado" in texto_lower or "🔴" in texto:
         nivel, classe, emoji = "ELEVADO", "risco-elevado", "🔴"
@@ -253,13 +365,17 @@ def renderizar_nivel_risco(texto: str):
     else:
         nivel, classe, emoji = "BAIXO", "risco-baixo", "🟢"
 
+    indice = extrair_indice_seguranca(texto)
+
     st.markdown(f"""
     <div class="risco-box {classe}">
         <div style="font-size:2.5em;">{emoji}</div>
-        <div class="risco-titulo">NÍVEL DE RISCO: {nivel}</div>
+        <div class="risco-titulo">ÍNDICE DE SEGURANÇA: {indice}/100</div>
+        <div style="font-size:0.95em;color:#444;margin-top:2px;font-weight:600;">Nível de risco: {nivel}</div>
         <div style="font-size:0.85em;color:#555;margin-top:6px;">Estimativa preventiva baseada nas informações fornecidas</div>
     </div>
     """, unsafe_allow_html=True)
+    return indice
 
 DISCLAIMER_PADRAO = """
 <div class="disclaimer">
@@ -370,16 +486,17 @@ elif st.session_state.etapa == "App":
     st.markdown("<hr class='divider'>", unsafe_allow_html=True)
 
     # NAVBAR
-    cols = st.columns(8)
+    cols = st.columns(9)
     paginas_nav = [
         ("🏠", "Home"), ("🚶", "Trajeto"), ("🏨", "Viagem"), ("🏠2", "Residencia"),
-        ("👶", "Infantil"), ("👵", "Idosos"), ("📱", "Golpes"), ("📚", "Biblioteca"),
+        ("👶", "Infantil"), ("👵", "Idosos"), ("📱", "Golpes"), ("☑️", "Checklist"), ("📚", "Biblioteca"),
     ]
     nomes_nav = {
         "Home": "Painel Principal", "Trajeto": "Análise de Trajeto",
         "Viagem": "Segurança em Viagem", "Residencia": "Segurança Residencial",
         "Infantil": "Segurança Infantil", "Idosos": "Segurança para Idosos",
-        "Golpes": "Guia de Golpes Comuns", "Biblioteca": "Biblioteca de Relatórios",
+        "Golpes": "Guia de Golpes Comuns", "Checklist": "Checklist Diário",
+        "Biblioteca": "Biblioteca de Relatórios",
     }
     for i, (icone, pagina) in enumerate(paginas_nav):
         if cols[i].button(icone, key=f"nav_{pagina}", help=nomes_nav[pagina]):
@@ -394,8 +511,8 @@ elif st.session_state.etapa == "App":
     if st.session_state.pagina == "Home":
         col_u, col_r = st.columns([3, 1])
         with col_u:
-            st.title(f"Olá, {st.session_state.usuario}! 🛡️")
-            st.markdown("<span class='badge'>Modo Proteção Ativo</span>", unsafe_allow_html=True)
+            st.title("🛡️ Central de Segurança")
+            st.markdown(f"<span class='badge'>{st.session_state.usuario}</span>", unsafe_allow_html=True)
         with col_r:
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("🚪 Sair"):
@@ -420,28 +537,128 @@ elif st.session_state.etapa == "App":
                     st.error("Arquivo inválido.")
             st.markdown("<br>", unsafe_allow_html=True)
 
-        st.markdown("#### ⚙️ Seu perfil")
-        col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            st.session_state.cidade_padrao = st.text_input("Sua cidade:", value=st.session_state.cidade_padrao, placeholder="ex: São Paulo, SP")
-        with col_b:
-            st.session_state.tem_filhos = st.checkbox("👶 Tenho filhos", value=st.session_state.tem_filhos)
-        with col_c:
-            st.session_state.tem_idosos_em_casa = st.checkbox("👵 Tenho idosos em casa", value=st.session_state.tem_idosos_em_casa)
+        # ── ÍNDICE DE PROTEÇÃO — indicador principal ──
+        ultimos_indices = [r['indice_seguranca'] for r in st.session_state.historico_relatorios[-5:] if r.get('indice_seguranca') is not None]
+        if ultimos_indices:
+            indice_medio = round(sum(ultimos_indices) / len(ultimos_indices))
+        else:
+            indice_medio = None
+
+        if indice_medio is not None:
+            if indice_medio >= 75:
+                cor_idx, emoji_idx, msg_idx, classe_idx = "#22C55E", "🟢", "Você não possui nenhum alerta crítico recente.", "risco-baixo"
+            elif indice_medio >= 50:
+                cor_idx, emoji_idx, msg_idx, classe_idx = "#F59E0B", "🟡", "Encontramos alguns pontos que merecem atenção.", "risco-moderado"
+            else:
+                cor_idx, emoji_idx, msg_idx, classe_idx = "#EF4444", "🔴", "Há recomendações importantes nas suas últimas análises.", "risco-elevado"
+
+            st.markdown(f"""
+            <div class="indice-protecao-box {classe_idx}" style="border-color:{cor_idx};">
+                <div style="font-size:0.85em;color:#555;letter-spacing:1px;">ÍNDICE DE PROTEÇÃO (média recente)</div>
+                <div class="indice-numero" style="color:{cor_idx};">{emoji_idx} {indice_medio}/100</div>
+                <div class="indice-sub">{msg_idx}</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class="indice-protecao-box" style="border-color:#3B82F6;background:#EFF6FF;">
+                <div style="font-size:0.85em;color:#555;">ÍNDICE DE PROTEÇÃO</div>
+                <div class="indice-numero" style="color:#1D4ED8;">—</div>
+                <div class="indice-sub">Faça sua primeira análise para ver seu índice aqui.</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # ── BOTÃO CENTRAL DE NOVA ANÁLISE ──
+        if st.button("🔍 FAZER NOVA ANÁLISE", key="btn_nova_analise_home", use_container_width=True):
+            st.session_state.pagina = "Trajeto"
+            st.rerun()
 
         st.markdown("<br>", unsafe_allow_html=True)
 
+        # ── RESUMO EDUCATIVO (não é dado em tempo real — deixamos isso claro) ──
+        with st.expander("📋 Tipos de risco comuns para ficar atento (resumo educativo geral)"):
+            st.markdown("""<div class="disclaimer" style="margin-top:0;">
+            Este é um resumo educativo geral sobre categorias de risco frequentemente reportadas em grandes centros urbanos —
+            não é um boletim em tempo real da sua região específica. Para uma análise direcionada ao seu trajeto ou situação,
+            use o botão "Fazer Nova Análise" acima.
+            </div>""", unsafe_allow_html=True)
+            st.markdown("""
+- ⚠️ **Golpe do falso Pix** — segue em alta em todo o Brasil, fique atento a comprovantes falsos
+- 🚗 **Furto de veículos e itens internos** — mais comum em estacionamentos não monitorados
+- 📱 **Furto de celular em vias movimentadas** — principalmente em horários de pico
+- 🌧️ **Baixa visibilidade em dias de chuva** — reduz o tempo de reação a qualquer imprevisto
+- 🌙 **Trajetos noturnos em vias pouco iluminadas** — atenção redobrada após 22h
+            """)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── DASHBOARD EM CARDS ──
+        st.markdown("### 📊 Seu histórico")
         tipos = {}
         for r in st.session_state.historico_relatorios:
             tipos[r['tipo']] = tipos.get(r['tipo'], 0) + 1
 
+        horas_planejamento = round(st.session_state.tempo_total_planejamento_min / 60, 1)
+
         c1, c2, c3, c4 = st.columns(4)
-        c1.markdown(f"<div class='stat-box'><div class='stat-numero'>{len(st.session_state.historico_relatorios)}</div><div>Relatórios gerados</div></div>", unsafe_allow_html=True)
-        c2.markdown(f"<div class='stat-box'><div class='stat-numero'>{len(st.session_state.relatorios_salvos)}</div><div>Salvos</div></div>", unsafe_allow_html=True)
-        c3.markdown(f"<div class='stat-box'><div class='stat-numero'>{tipos.get('Trajeto',0)}</div><div>Trajetos analisados</div></div>", unsafe_allow_html=True)
-        c4.markdown(f"<div class='stat-box'><div class='stat-numero'>{tipos.get('Residência',0)}</div><div>Análises residenciais</div></div>", unsafe_allow_html=True)
+        with c1:
+            st.markdown(f"<div class='dash-card'><div class='dash-card-emoji'>📄</div><div class='dash-card-valor'>{len(st.session_state.historico_relatorios)}</div><div class='dash-card-label'>Análises realizadas</div></div>", unsafe_allow_html=True)
+        with c2:
+            st.markdown(f"<div class='dash-card'><div class='dash-card-emoji'>⏱️</div><div class='dash-card-valor'>{horas_planejamento}h</div><div class='dash-card-label'>De planejamento preventivo</div></div>", unsafe_allow_html=True)
+        with c3:
+            st.markdown(f"<div class='dash-card'><div class='dash-card-emoji'>🚶</div><div class='dash-card-valor'>{tipos.get('Trajeto',0)}</div><div class='dash-card-label'>Trajetos analisados</div></div>", unsafe_allow_html=True)
+        with c4:
+            st.markdown(f"<div class='dash-card'><div class='dash-card-emoji'>🏠</div><div class='dash-card-valor'>{tipos.get('Residência',0)}</div><div class='dash-card-label'>Residências protegidas</div></div>", unsafe_allow_html=True)
 
         st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── BARRAS DE PROGRESSO POR CATEGORIA ──
+        st.markdown("### 📈 Seu progresso por categoria")
+        categorias_progresso = [
+            ("🏠 Casa", "Residência", 3), ("🚶 Trajetos", "Trajeto", 5),
+            ("✈️ Viagens", "Viagem", 3), ("📱 Golpes estudados", "Golpes", 5),
+        ]
+        for label, tipo_cat, meta in categorias_progresso:
+            pct = calcular_progresso_categoria(tipo_cat, meta)
+            st.markdown(f"""
+            <div class="progresso-categoria">
+                <div class="progresso-categoria-label"><span>{label}</span><span>{pct}%</span></div>
+                <div class="progresso-barra-bg"><div class="progresso-barra-fill" style="width:{pct}%;"></div></div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── CONQUISTAS ──
+        st.markdown("### 🏅 Conquistas")
+        col_conq1, col_conq2 = st.columns(2)
+        for i, c in enumerate(CONQUISTAS_DEFINIDAS):
+            col = col_conq1 if i % 2 == 0 else col_conq2
+            desbloqueada = c['id'] in st.session_state.conquistas_desbloqueadas
+            classe = "conquista-card" if desbloqueada else "conquista-card conquista-bloqueada"
+            with col:
+                st.markdown(f"""
+                <div class="{classe}">
+                    <div class="conquista-emoji">{c['emoji'] if desbloqueada else '🔒'}</div>
+                    <div>
+                        <div style="font-weight:600;">{c['nome']}</div>
+                        <div style="font-size:0.78em;color:#888;">{'Desbloqueada' if desbloqueada else 'Bloqueada'}</div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── PERFIL ──
+        with st.expander("⚙️ Configurar meu perfil"):
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                st.session_state.cidade_padrao = st.text_input("Sua cidade:", value=st.session_state.cidade_padrao, placeholder="ex: São Paulo, SP", key="cidade_padrao_input")
+            with col_b:
+                st.session_state.tem_filhos = st.checkbox("👶 Tenho filhos", value=st.session_state.tem_filhos, key="check_filhos")
+            with col_c:
+                st.session_state.tem_idosos_em_casa = st.checkbox("👵 Tenho idosos em casa", value=st.session_state.tem_idosos_em_casa, key="check_idosos")
+
         st.markdown("<div class='card'>💡 <em>'Prevenção não é viver com medo. É viver com preparo.'</em></div>", unsafe_allow_html=True)
 
         st.markdown("### 🗺️ O que cada aba faz")
@@ -452,7 +669,7 @@ elif st.session_state.etapa == "App":
             "👶 Infantil":     "Orientações de segurança para quando os filhos saem sozinhos ou ficam em casa",
             "👵 Idosos":       "Cuidados de segurança específicos para idosos — em casa e em deslocamentos",
             "📱 Golpes":       "Explicação detalhada dos golpes mais comuns e como se proteger de cada um",
-            "📚 Biblioteca":   "Todos os relatórios salvos, organizados para consulta",
+            "📚 Biblioteca":   "Histórico completo de relatórios, organizado por data e nível de risco",
         }
         for aba, desc in guia.items():
             st.markdown(f"**{aba}** — {desc}")
@@ -460,8 +677,13 @@ elif st.session_state.etapa == "App":
         if st.session_state.historico_relatorios:
             st.markdown("### 🕐 Últimos Relatórios")
             for item in reversed(st.session_state.historico_relatorios[-4:]):
+                idx_item = item.get('indice_seguranca')
+                if idx_item is not None:
+                    selo = "🟢" if idx_item >= 75 else ("🟡" if idx_item >= 50 else "🔴")
+                else:
+                    selo = "🔵"
                 st.markdown(
-                    f"<div class='hist-item'><span class='badge'>{item['tipo']}</span> "
+                    f"<div class='hist-item'>{selo} <span class='badge'>{item['tipo']}</span> "
                     f"<small style='color:#888'>{item['data']}</small><br>"
                     f"<small>{item['local'][:80]}</small></div>", unsafe_allow_html=True)
 
@@ -510,9 +732,12 @@ elif st.session_state.etapa == "App":
                         f"☑ [item 1]\n☑ [item 2]\n☑ [item 3]\n☑ [item 4]\n☑ [item 5]"
                     )
                     res = guardiao_ia(prompt)
-                    salvar_relatorio("Trajeto", f"{origem} → {destino}", res)
+                    indice_calc = extrair_indice_seguranca(res)
+                    salvar_relatorio("Trajeto", f"{origem} → {destino}", res, indice_calc)
                     st.session_state['trajeto_temp'] = res
                     renderizar_nivel_risco(res)
+                    for nova in verificar_conquistas():
+                        st.markdown(f"<div class='toast-conquista'>🎉 <strong>Nova conquista desbloqueada!</strong><br>{nova['emoji']} {nova['nome']}</div>", unsafe_allow_html=True)
                     st.markdown(f"<div class='card'>{res}</div>", unsafe_allow_html=True)
                     st.markdown(DISCLAIMER_PADRAO, unsafe_allow_html=True)
             else:
@@ -574,9 +799,12 @@ elif st.session_state.etapa == "App":
                         f"☑ [item 1]\n☑ [item 2]\n☑ [item 3]\n☑ [item 4]\n☑ [item 5]"
                     )
                     res = guardiao_ia(prompt)
-                    salvar_relatorio("Viagem", destino_viagem, res)
+                    indice_calc = extrair_indice_seguranca(res)
+                    salvar_relatorio("Viagem", destino_viagem, res, indice_calc)
                     st.session_state['viagem_temp'] = res
                     renderizar_nivel_risco(res)
+                    for nova in verificar_conquistas():
+                        st.markdown(f"<div class='toast-conquista'>🎉 <strong>Nova conquista desbloqueada!</strong><br>{nova['emoji']} {nova['nome']}</div>", unsafe_allow_html=True)
                     st.markdown(f"<div class='card-orange'>{res}</div>", unsafe_allow_html=True)
                     st.markdown(DISCLAIMER_PADRAO, unsafe_allow_html=True)
             else:
@@ -643,9 +871,12 @@ elif st.session_state.etapa == "App":
                         f"1. [ação mais urgente]\n2. [ação 2]\n3. [ação 3]\n4. [ação 4]"
                     )
                     res = guardiao_ia(prompt)
-                    salvar_relatorio("Residência", f"{tipo_moradia} — {bairro_casa}", res)
+                    indice_calc = extrair_indice_seguranca(res)
+                    salvar_relatorio("Residência", f"{tipo_moradia} — {bairro_casa}", res, indice_calc)
                     st.session_state['residencia_temp'] = res
                     renderizar_nivel_risco(res)
+                    for nova in verificar_conquistas():
+                        st.markdown(f"<div class='toast-conquista'>🎉 <strong>Nova conquista desbloqueada!</strong><br>{nova['emoji']} {nova['nome']}</div>", unsafe_allow_html=True)
                     st.markdown(f"<div class='card-purple'>{res}</div>", unsafe_allow_html=True)
                     st.markdown(DISCLAIMER_PADRAO, unsafe_allow_html=True)
             else:
@@ -709,9 +940,12 @@ elif st.session_state.etapa == "App":
                         f"☑ [item 1]\n☑ [item 2]\n☑ [item 3]\n☑ [item 4]"
                     )
                     res = guardiao_ia(prompt, "Você está orientando pais/responsáveis sobre segurança infantil. Seja acolhedor, nunca alarmista, e sempre apropriado para a idade da criança mencionada.")
-                    salvar_relatorio("Infantil", situacao_infantil[:60], res)
+                    indice_calc = extrair_indice_seguranca(res)
+                    salvar_relatorio("Infantil", situacao_infantil[:60], res, indice_calc)
                     st.session_state['infantil_temp'] = res
                     renderizar_nivel_risco(res)
+                    for nova in verificar_conquistas():
+                        st.markdown(f"<div class='toast-conquista'>🎉 <strong>Nova conquista desbloqueada!</strong><br>{nova['emoji']} {nova['nome']}</div>", unsafe_allow_html=True)
                     st.markdown(f"<div class='card-green'>{res}</div>", unsafe_allow_html=True)
                     st.markdown(DISCLAIMER_PADRAO, unsafe_allow_html=True)
             else:
@@ -778,9 +1012,12 @@ elif st.session_state.etapa == "App":
                         f"☑ [item 1]\n☑ [item 2]\n☑ [item 3]\n☑ [item 4]"
                     )
                     res = guardiao_ia(prompt, "Você está orientando sobre segurança de idosos. Seja respeitoso com a autonomia e dignidade da pessoa idosa — nunca infantilize ou trate como incapaz.")
-                    salvar_relatorio("Idosos", situacao_idoso[:60], res)
+                    indice_calc = extrair_indice_seguranca(res)
+                    salvar_relatorio("Idosos", situacao_idoso[:60], res, indice_calc)
                     st.session_state['idosos_temp'] = res
                     renderizar_nivel_risco(res)
+                    for nova in verificar_conquistas():
+                        st.markdown(f"<div class='toast-conquista'>🎉 <strong>Nova conquista desbloqueada!</strong><br>{nova['emoji']} {nova['nome']}</div>", unsafe_allow_html=True)
                     st.markdown(f"<div class='card-orange'>{res}</div>", unsafe_allow_html=True)
                     st.markdown(DISCLAIMER_PADRAO, unsafe_allow_html=True)
             else:
@@ -913,43 +1150,133 @@ elif st.session_state.etapa == "App":
                 file_name="orientacao_emergencia.txt", mime="text/plain")
 
     # ========================
-    # BIBLIOTECA
+    # CHECKLIST DIÁRIO
+    # ========================
+    elif st.session_state.pagina == "Checklist":
+        st.header("☑️ Checklist Diário")
+        st.markdown("Confira antes de sair de casa. Pequenos hábitos que aumentam sua segurança no dia a dia.")
+
+        hoje = datetime.now().strftime('%d/%m/%Y')
+        if st.session_state.checklist_diario_status.get('data') != hoje:
+            st.session_state.checklist_diario_status = {'data': hoje, 'itens': {}}
+
+        itens_checklist = [
+            ("celular", "📱 Celular carregado"),
+            ("localizacao", "📍 Localização compartilhada ativada"),
+            ("familia", "👨‍👩‍👧 Família/alguém avisado do trajeto"),
+            ("documentos", "🪪 Documentos"),
+            ("dinheiro", "💰 Dinheiro separado (não tudo na mesma carteira)"),
+            ("carregador", "🔌 Carregador portátil/power bank"),
+            ("rota", "🗺️ Rota verificada antes de saiir"),
+        ]
+
+        marcados = 0
+        for chave_item, label_item in itens_checklist:
+            valor_atual = st.session_state.checklist_diario_status['itens'].get(chave_item, False)
+            novo_valor = st.checkbox(label_item, value=valor_atual, key=f"check_{chave_item}_{hoje}")
+            st.session_state.checklist_diario_status['itens'][chave_item] = novo_valor
+            if novo_valor:
+                marcados += 1
+
+        pct_checklist = round(marcados / len(itens_checklist) * 100)
+        st.markdown("<br>", unsafe_allow_html=True)
+        cor_check = "#22C55E" if pct_checklist == 100 else ("#F59E0B" if pct_checklist >= 50 else "#EF4444")
+        st.markdown(f"""
+        <div class="progresso-categoria">
+            <div class="progresso-categoria-label"><span>Checklist de hoje</span><span>{marcados}/{len(itens_checklist)}</span></div>
+            <div class="progresso-barra-bg"><div class="progresso-barra-fill" style="width:{pct_checklist}%;background:{cor_check};"></div></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if pct_checklist == 100:
+            st.success("✅ Checklist completo! Você está com tudo certo para sair.")
+        elif marcados > 0:
+            st.info(f"Faltam {len(itens_checklist) - marcados} item(ns) para completar o checklist de hoje.")
+
+    # ========================
+    # BIBLIOTECA / HISTÓRICO DE SEGURANÇA
     # ========================
     elif st.session_state.pagina == "Biblioteca":
-        st.header("📚 Biblioteca de Relatórios")
-        st.markdown("Todos os seus relatórios e análises salvos.")
+        st.header("📚 Histórico de Segurança")
+        st.markdown("Linha do tempo de todas as suas análises, com o selo de risco de cada uma.")
 
-        if not st.session_state.relatorios_salvos:
-            st.info("Biblioteca vazia. Gere relatórios nas outras abas e salve os importantes aqui!")
+        if not st.session_state.historico_relatorios:
+            st.info("Nenhuma análise ainda. Use as abas acima para gerar seu primeiro relatório!")
         else:
-            tipos_bib = list(set(r['tipo'] for r in st.session_state.relatorios_salvos))
-            filtro = st.selectbox("Filtrar por tipo:", ["Todos"] + tipos_bib)
+            tipos_bib = list(set(r['tipo'] for r in st.session_state.historico_relatorios))
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                filtro = st.selectbox("Filtrar por tipo:", ["Todos"] + tipos_bib, key="filtro_bib_tipo")
+            with col_f2:
+                filtro_selo = st.selectbox("Filtrar por nível:", ["Todos", "🟢 Seguro", "🟡 Atenção", "🔴 Alto risco"], key="filtro_bib_selo")
 
-            rels_filtrados = [
-                r for r in st.session_state.relatorios_salvos
-                if filtro == "Todos" or r['tipo'] == filtro
-            ]
+            def selo_do_item(item):
+                idx = item.get('indice_seguranca')
+                if idx is None:
+                    return "🔵", "Sem índice"
+                elif idx >= 75:
+                    return "🟢", "Seguro"
+                elif idx >= 50:
+                    return "🟡", "Atenção"
+                else:
+                    return "🔴", "Alto risco"
+
+            rels_filtrados = []
+            for r in st.session_state.historico_relatorios:
+                if filtro != "Todos" and r['tipo'] != filtro:
+                    continue
+                selo_emoji, selo_label = selo_do_item(r)
+                if filtro_selo != "Todos" and selo_label not in filtro_selo:
+                    continue
+                rels_filtrados.append(r)
 
             st.markdown(f"**{len(rels_filtrados)} relatório(s) encontrado(s)**")
             st.markdown("<br>", unsafe_allow_html=True)
 
-            for i, item in enumerate(reversed(rels_filtrados)):
+            # Agrupamento por data relativa (Hoje / Ontem / Esta semana / Mais antigo)
+            hoje_str = datetime.now().strftime('%d/%m')
+            agrupado = {"Hoje": [], "Esta semana": [], "Anteriores": []}
+            for item in reversed(rels_filtrados):
+                data_item = item['data'].split(' ')[0]
+                if data_item == hoje_str:
+                    agrupado["Hoje"].append(item)
+                else:
+                    agrupado["Esta semana"].append(item)  # simplificado — sem cálculo de data exato
+
+            for grupo_nome, itens_grupo in agrupado.items():
+                if not itens_grupo:
+                    continue
+                st.markdown(f"#### {grupo_nome}")
+                for i, item in enumerate(itens_grupo):
+                    selo_emoji, selo_label = selo_do_item(item)
+                    idx_val = item.get('indice_seguranca')
+                    idx_texto = f"{idx_val}/100" if idx_val is not None else "—"
+                    with st.expander(f"{selo_emoji} [{item['tipo']}] {item['local'][:60]} — {idx_texto} — {item['data']}"):
+                        st.markdown(f"<div class='card'>{item['conteudo']}</div>", unsafe_allow_html=True)
+                        idx_real_hist = st.session_state.historico_relatorios.index(item)
+                        col_sv, col_del = st.columns([3, 1])
+                        with col_sv:
+                            if st.button("❤️ Salvar nos favoritos", key=f"sv_bib_{grupo_nome}_{i}"):
+                                st.session_state.relatorios_salvos.append(item.copy())
+                                st.success("Salvo!")
+                        with col_del:
+                            if st.button("🗑️", key=f"del_bib_{grupo_nome}_{i}"):
+                                st.session_state.historico_relatorios.pop(idx_real_hist)
+                                st.rerun()
+
+        if st.session_state.relatorios_salvos:
+            st.markdown("<hr class='divider'>", unsafe_allow_html=True)
+            st.markdown("### ❤️ Seus Favoritos")
+            for i, item in enumerate(reversed(st.session_state.relatorios_salvos)):
                 idx_real = len(st.session_state.relatorios_salvos) - 1 - i
-                with st.expander(f"[{item['tipo']}] {item['local']} — {item['data']}"):
+                with st.expander(f"❤️ [{item['tipo']}] {item['local'][:60]} — {item['data']}"):
                     st.markdown(f"<div class='card'>{item['conteudo']}</div>", unsafe_allow_html=True)
-                    col_dl, col_del = st.columns([3, 1])
-                    with col_dl:
-                        st.download_button("📋 Baixar", data=item['conteudo'],
-                            file_name=f"{item['tipo'].lower().replace(' ','_')}.txt",
-                            mime="text/plain", key=f"dl_bib_{i}")
-                    with col_del:
-                        if st.button("🗑️ Remover", key=f"del_bib_{i}"):
-                            st.session_state.relatorios_salvos.pop(idx_real)
-                            st.rerun()
+                    if st.button("🗑️ Remover dos favoritos", key=f"del_fav_{i}"):
+                        st.session_state.relatorios_salvos.pop(idx_real)
+                        st.rerun()
 
         if st.session_state.historico_relatorios:
             st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-            st.markdown("### 📊 Histórico Completo")
             historico_txt = "\n\n".join(
                 f"[{r['data']}] {r['tipo']} — {r['local']}\n{r['conteudo']}\n{'─'*40}"
                 for r in st.session_state.historico_relatorios
