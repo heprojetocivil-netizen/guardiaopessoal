@@ -32,6 +32,7 @@ st.markdown("""
         font-family: 'DM Sans', sans-serif !important;
         transition: all 0.2s ease;
     }
+    .stButton>button *, .stButton>button p { color: white !important; }
     .stButton>button:hover { background: linear-gradient(135deg, #172554, #1E3A8A) !important; transform: translateY(-1px); }
 
     h1, h2, h3 { font-family: 'Playfair Display', serif !important; color: #1A1A2E !important; }
@@ -116,6 +117,7 @@ st.markdown("""
         color: white !important; font-weight: 700 !important;
         border-radius: 12px !important; height: 3em !important;
     }
+    .perfil-btn>button *, .perfil-btn>button p { color: white !important; }
 
     .disclaimer {
         background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 10px;
